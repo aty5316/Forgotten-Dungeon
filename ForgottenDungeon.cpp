@@ -5,6 +5,9 @@
 #include <optional>
 #include <sstream>
 #include <iomanip>
+#include <filesystem>
+#include <iostream>
+#include <cctype>
 
 using namespace std;
 
@@ -186,6 +189,155 @@ public:
         sprite.setPosition({x, y});
         sprite.setScale({sx, sy});
         window.draw(sprite);
+    }
+};
+
+
+class WorldBackground
+{
+private:
+    sf::Texture texture;
+    bool loaded;
+    string loadedPath;
+
+    bool tryLoadExact(const string& path)
+    {
+        if (!filesystem::exists(path))
+            return false;
+
+        sf::Texture candidate;
+
+        if (!candidate.loadFromFile(path))
+            return false;
+
+        sf::Vector2u size = candidate.getSize();
+
+        if (size.x < 900 || size.x < size.y * 2)
+            return false;
+
+        texture = std::move(candidate);
+        loaded = true;
+        loadedPath = path;
+        cout << "Background size: " << size.x << "x" << size.y << endl;
+        return true;
+    }
+
+    bool isPng(const filesystem::path& path) const
+    {
+        string ext = path.extension().string();
+
+        for (char& c : ext)
+            c = static_cast<char>(tolower(c));
+
+        return ext == ".png";
+    }
+
+    bool looksLikeBackgroundName(string name) const
+    {
+        for (char& c : name)
+            c = static_cast<char>(tolower(c));
+
+        if (name.find("tileset") != string::npos)
+            return false;
+
+        return name.find("background") != string::npos ||
+               name.find("cave_background") != string::npos ||
+               name.find("cave") != string::npos ||
+               name.find("фон") != string::npos ||
+               name.find("пещ") != string::npos ||
+               name.find("темн") != string::npos ||
+               name.find("crystal") != string::npos ||
+               name.find("generated") != string::npos;
+    }
+
+public:
+    WorldBackground()
+    {
+        loaded = false;
+
+        vector<string> exactPaths = {
+            "CavePlatformerTileset/cave_background.png",
+            "CavePlatformerTileset/background.png",
+            "CavePlatformerTileset/CaveBackground.png",
+            "CavePlatformerTileset/темная_пещера_с_голубыми_кристаллами.png",
+            "assets/cave_background.png",
+            "assets/background.png",
+            "cave_background.png",
+            "background.png",
+            "темная_пещера_с_голубыми_кристаллами.png"
+        };
+
+        for (const string& path : exactPaths)
+        {
+            if (tryLoadExact(path))
+            {
+                cout << "Loaded background: " << loadedPath << endl;
+                return;
+            }
+        }
+
+        vector<string> folders = {
+            "CavePlatformerTileset",
+            "assets",
+            "."
+        };
+
+        for (const string& folder : folders)
+        {
+            if (!filesystem::exists(folder))
+                continue;
+
+            for (const auto& entry : filesystem::directory_iterator(folder))
+            {
+                if (!entry.is_regular_file())
+                    continue;
+
+                filesystem::path path = entry.path();
+
+                if (!isPng(path))
+                    continue;
+
+                if (!looksLikeBackgroundName(path.filename().string()))
+                    continue;
+
+                if (tryLoadExact(path.string()))
+                {
+                    cout << "Loaded background: " << loadedPath << endl;
+                    return;
+                }
+            }
+        }
+
+        cout << "Background image was not found. Fallback cave background is used." << endl;
+    }
+
+    bool isLoaded() const
+    {
+        return loaded;
+    }
+
+    void draw(sf::RenderWindow& window, float levelWidth, float windowHeight) const
+    {
+        if (!loaded)
+            return;
+
+        sf::Sprite sprite(texture);
+
+        sf::Vector2u size = texture.getSize();
+
+        float scaleX = levelWidth / static_cast<float>(size.x);
+        float scaleY = windowHeight / static_cast<float>(size.y);
+
+        sprite.setPosition({0.f, 0.f});
+        sprite.setScale({scaleX, scaleY});
+
+        window.draw(sprite);
+
+        sf::RectangleShape visibilityTint;
+        visibilityTint.setPosition({0.f, 0.f});
+        visibilityTint.setSize({levelWidth, windowHeight});
+        visibilityTint.setFillColor(sf::Color(35, 28, 45, 45));
+        window.draw(visibilityTint);
     }
 };
 
@@ -1047,29 +1199,36 @@ public:
     }
 };
 
-void drawBackground(sf::RenderWindow& window, const TileSet& tiles, float levelWidth)
+void drawBackground(sf::RenderWindow& window, const TileSet& tiles, const WorldBackground& backgroundImage, float levelWidth)
 {
-    sf::RectangleShape background;
-    background.setSize({levelWidth + 1280.f, 1000.f});
-    background.setFillColor(sf::Color(25, 19, 24));
-    window.draw(background);
-
-    sf::RectangleShape farWall;
-    farWall.setSize({levelWidth + 1280.f, 440.f});
-    farWall.setPosition({0.f, 120.f});
-    farWall.setFillColor(sf::Color(50, 31, 45));
-    window.draw(farWall);
-
-    for (int i = 0; i < static_cast<int>(levelWidth / 180.f); i++)
+    if (backgroundImage.isLoaded())
     {
-        sf::CircleShape crystalGlow(9.f, 4);
-        crystalGlow.setRotation(sf::degrees(45.f));
-        crystalGlow.setFillColor(sf::Color(38, 87, 130));
-        crystalGlow.setPosition({
-            120.f + i * 180.f,
-            145.f + static_cast<float>((i % 5) * 58)
-        });
-        window.draw(crystalGlow);
+        backgroundImage.draw(window, levelWidth, 720.f);
+    }
+    else
+    {
+        sf::RectangleShape background;
+        background.setSize({levelWidth + 1280.f, 1000.f});
+        background.setFillColor(sf::Color(25, 19, 24));
+        window.draw(background);
+
+        sf::RectangleShape farWall;
+        farWall.setSize({levelWidth + 1280.f, 440.f});
+        farWall.setPosition({0.f, 120.f});
+        farWall.setFillColor(sf::Color(50, 31, 45));
+        window.draw(farWall);
+
+        for (int i = 0; i < static_cast<int>(levelWidth / 180.f); i++)
+        {
+            sf::CircleShape crystalGlow(9.f, 4);
+            crystalGlow.setRotation(sf::degrees(45.f));
+            crystalGlow.setFillColor(sf::Color(38, 87, 130));
+            crystalGlow.setPosition({
+                120.f + i * 180.f,
+                145.f + static_cast<float>((i % 5) * 58)
+            });
+            window.draw(crystalGlow);
+        }
     }
 
     if (tiles.isLoaded())
@@ -1104,6 +1263,7 @@ int main()
     window.setFramerateLimit(60);
 
     TileSet tiles;
+    WorldBackground backgroundImage;
     Player player;
 
     sf::View camera;
@@ -1297,7 +1457,7 @@ int main()
 
         window.setView(camera);
 
-        drawBackground(window, tiles, levelWidth);
+        drawBackground(window, tiles, backgroundImage, levelWidth);
 
         for (auto& p : platforms)
             p.draw(window, tiles);
