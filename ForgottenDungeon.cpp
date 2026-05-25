@@ -3,8 +3,128 @@
 #include <cmath>
 #include <string>
 #include <optional>
+#include <sstream>
+#include <iomanip>
 
 using namespace std;
+
+string twoDigits(int value)
+{
+    ostringstream out;
+    out << setw(2) << setfill('0') << value;
+    return out.str();
+}
+
+class FrameAnimation
+{
+private:
+    vector<sf::Texture> frames;
+    float timer;
+    float fps;
+    int current;
+    bool loaded;
+
+public:
+    FrameAnimation()
+    {
+        timer = 0.f;
+        fps = 10.f;
+        current = 0;
+        loaded = false;
+    }
+
+    bool loadSequence(const string& folder, const string& prefix, int count, float framesPerSecond)
+    {
+        frames.clear();
+        timer = 0.f;
+        current = 0;
+        fps = framesPerSecond;
+
+        for (int i = 0; i < count; i++)
+        {
+            string path = folder + "/" + prefix + "-" + twoDigits(i) + ".png";
+
+            sf::Texture texture;
+            if (!texture.loadFromFile(path))
+            {
+                frames.clear();
+                loaded = false;
+                return false;
+            }
+
+            texture.setSmooth(false);
+            frames.push_back(std::move(texture));
+        }
+
+        loaded = !frames.empty();
+        return loaded;
+    }
+
+    void restart()
+    {
+        timer = 0.f;
+        current = 0;
+    }
+
+    void update(float dt, bool loop)
+    {
+        if (!loaded || frames.empty())
+            return;
+
+        timer += dt;
+        float frameTime = 1.f / fps;
+
+        while (timer >= frameTime)
+        {
+            timer -= frameTime;
+
+            if (current + 1 < static_cast<int>(frames.size()))
+            {
+                current++;
+            }
+            else if (loop)
+            {
+                current = 0;
+            }
+            else
+            {
+                current = static_cast<int>(frames.size()) - 1;
+            }
+        }
+    }
+
+    bool isLoaded() const
+    {
+        return loaded;
+    }
+
+    int index() const
+    {
+        return current;
+    }
+
+    void draw(sf::RenderWindow& window, sf::Vector2f bottomCenter, bool faceRight, float scale, sf::Color color = sf::Color::White) const
+    {
+        if (!loaded || frames.empty())
+            return;
+
+        const sf::Texture& texture = frames[current];
+        sf::Sprite sprite(texture);
+
+        sf::Vector2u size = texture.getSize();
+        sprite.setOrigin({static_cast<float>(size.x) / 2.f, static_cast<float>(size.y)});
+
+        if (faceRight)
+            sprite.setScale({scale, scale});
+        else
+            sprite.setScale({-scale, scale});
+
+        sprite.setPosition(bottomCenter);
+        sprite.setColor(color);
+        window.draw(sprite);
+    }
+};
+
 
 bool touch(const sf::FloatRect& a, const sf::FloatRect& b)
 {
@@ -414,6 +534,7 @@ private:
     bool canDash;
     bool attacking;
     bool faceRight;
+    bool spritesReady;
 
     int hp;
     int coins;
@@ -426,13 +547,18 @@ private:
     float damageTimer;
     float dashTimer;
 
+    FrameAnimation idleAnim;
+    FrameAnimation runAnim;
+    FrameAnimation jumpAnim;
+    FrameAnimation punchAnim;
+
     sf::RectangleShape dagger;
 
 public:
     Player()
     {
         body.setSize({40.f, 60.f});
-        body.setFillColor(sf::Color(180, 140, 70));
+        body.setFillColor(sf::Color::Transparent);
         body.setPosition({100.f, 300.f});
 
         velocity = {0.f, 0.f};
@@ -442,6 +568,7 @@ public:
         canDash = true;
         attacking = false;
         faceRight = true;
+        spritesReady = false;
 
         hp = 5;
         coins = 0;
@@ -453,6 +580,16 @@ public:
         attackTimer = 0.f;
         damageTimer = 0.f;
         dashTimer = 0.f;
+
+        string mainFolder = "Adventurer all/Adventurer/Individual Sprites";
+        string handFolder = "Adventurer all/Adventurer-Hand-Combat/Individual Sprites";
+
+        bool idleLoaded = idleAnim.loadSequence(mainFolder, "adventurer-idle", 4, 7.f);
+        bool runLoaded = runAnim.loadSequence(mainFolder, "adventurer-run", 6, 12.f);
+        bool jumpLoaded = jumpAnim.loadSequence(mainFolder, "adventurer-jump", 4, 8.f);
+        bool punchLoaded = punchAnim.loadSequence(handFolder, "adventurer-punch", 13, 28.f);
+
+        spritesReady = idleLoaded && runLoaded && jumpLoaded && punchLoaded;
 
         dagger.setSize({34.f, 8.f});
         dagger.setFillColor(sf::Color(230, 230, 240));
@@ -521,32 +658,37 @@ public:
         if (attackTimer <= 0.f)
         {
             attacking = true;
-            attackTimer = 0.18f;
+            attackTimer = 0.46f;
+            punchAnim.restart();
         }
     }
 
     bool isAttacking() const
     {
-        return attacking;
+        if (!attacking)
+            return false;
+
+        int frame = punchAnim.index();
+        return frame >= 3 && frame <= 10;
     }
 
     sf::FloatRect getAttackBounds() const
     {
         sf::RectangleShape hitbox;
-        hitbox.setSize({45.f, 28.f});
+        hitbox.setSize({68.f, 42.f});
 
         if (faceRight)
         {
             hitbox.setPosition({
-                body.getPosition().x + 38.f,
-                body.getPosition().y + 15.f
+                body.getPosition().x + 32.f,
+                body.getPosition().y + 8.f
             });
         }
         else
         {
             hitbox.setPosition({
-                body.getPosition().x - 43.f,
-                body.getPosition().y + 15.f
+                body.getPosition().x - 60.f,
+                body.getPosition().y + 8.f
             });
         }
 
@@ -582,6 +724,9 @@ public:
     {
         handleInput();
 
+        onGround = false;
+        body.setScale({1.f, 1.f});
+
         if (attackTimer > 0.f)
         {
             attackTimer -= dt;
@@ -606,19 +751,23 @@ public:
 
         body.move({velocity.x * dt, velocity.y * dt});
 
-        if (abs(velocity.x) > 10.f)
-            body.setScale({1.f, 0.95f});
-        else
-            body.setScale({1.f, 1.f});
-
-        if (!onGround)
-            body.setScale({0.9f, 1.1f});
+        if (spritesReady)
+        {
+            if (attacking)
+                punchAnim.update(dt, false);
+            else if (!onGround)
+                jumpAnim.update(dt, true);
+            else if (abs(velocity.x) > 10.f)
+                runAnim.update(dt, true);
+            else
+                idleAnim.update(dt, true);
+        }
 
         if (body.getPosition().y > 900.f)
             hp = 0;
     }
 
-    void draw(sf::RenderWindow& window) override
+    void drawFallback(sf::RenderWindow& window)
     {
         sf::Vector2f pos = body.getPosition();
 
@@ -650,26 +799,51 @@ public:
         hood.setPosition({pos.x + 7.f, pos.y - 15.f});
         window.draw(hood);
 
-        sf::RectangleShape belt;
-        belt.setSize({42.f, 6.f});
-        belt.setFillColor(sf::Color(45, 30, 20));
-        belt.setPosition({pos.x - 1.f, pos.y + 25.f});
-        window.draw(belt);
-
         if (attacking)
         {
             if (faceRight)
-            {
                 dagger.setPosition({pos.x + 40.f, pos.y + 22.f});
-                dagger.setRotation(sf::degrees(0.f));
-            }
             else
-            {
                 dagger.setPosition({pos.x - 35.f, pos.y + 22.f});
-                dagger.setRotation(sf::degrees(0.f));
-            }
 
             window.draw(dagger);
+        }
+    }
+
+    void draw(sf::RenderWindow& window) override
+    {
+        if (!spritesReady)
+        {
+            drawFallback(window);
+            return;
+        }
+
+        sf::Vector2f bottomCenter = {
+            body.getPosition().x + body.getSize().x / 2.f,
+            body.getPosition().y + body.getSize().y + 4.f
+        };
+
+        sf::Color tint = sf::Color::White;
+        if (damageTimer > 0.f)
+            tint = sf::Color(255, 120, 120);
+
+        float spriteScale = 2.25f;
+
+        if (attacking)
+        {
+            punchAnim.draw(window, bottomCenter, faceRight, spriteScale, tint);
+        }
+        else if (!onGround)
+        {
+            jumpAnim.draw(window, bottomCenter, faceRight, spriteScale, tint);
+        }
+        else if (abs(velocity.x) > 10.f)
+        {
+            runAnim.draw(window, bottomCenter, faceRight, spriteScale, tint);
+        }
+        else
+        {
+            idleAnim.draw(window, bottomCenter, faceRight, spriteScale, tint);
         }
     }
 
@@ -697,7 +871,6 @@ public:
         coins++;
     }
 };
-
 int main()
 {
     sf::RenderWindow window(
