@@ -8,11 +8,18 @@
 
 using namespace std;
 
+const float TILE = 48.f;
+
 string twoDigits(int value)
 {
     ostringstream out;
     out << setw(2) << setfill('0') << value;
     return out.str();
+}
+
+bool touch(const sf::FloatRect& a, const sf::FloatRect& b)
+{
+    return a.findIntersection(b).has_value();
 }
 
 class FrameAnimation
@@ -79,17 +86,11 @@ public:
             timer -= frameTime;
 
             if (current + 1 < static_cast<int>(frames.size()))
-            {
                 current++;
-            }
             else if (loop)
-            {
                 current = 0;
-            }
             else
-            {
                 current = static_cast<int>(frames.size()) - 1;
-            }
         }
     }
 
@@ -103,7 +104,13 @@ public:
         return current;
     }
 
-    void draw(sf::RenderWindow& window, sf::Vector2f bottomCenter, bool faceRight, float scale, sf::Color color = sf::Color::White) const
+    void draw(
+        sf::RenderWindow& window,
+        sf::Vector2f bottomCenter,
+        bool faceRight,
+        float scale,
+        sf::Color color = sf::Color::White
+    ) const
     {
         if (!loaded || frames.empty())
             return;
@@ -112,7 +119,10 @@ public:
         sf::Sprite sprite(texture);
 
         sf::Vector2u size = texture.getSize();
-        sprite.setOrigin({static_cast<float>(size.x) / 2.f, static_cast<float>(size.y)});
+        sprite.setOrigin({
+            static_cast<float>(size.x) / 2.f,
+            static_cast<float>(size.y)
+        });
 
         if (faceRight)
             sprite.setScale({scale, scale});
@@ -121,15 +131,63 @@ public:
 
         sprite.setPosition(bottomCenter);
         sprite.setColor(color);
+
         window.draw(sprite);
     }
 };
 
-
-bool touch(const sf::FloatRect& a, const sf::FloatRect& b)
+class TileSet
 {
-    return a.findIntersection(b).has_value();
-}
+private:
+    sf::Texture texture;
+    bool loaded;
+
+public:
+    TileSet()
+    {
+        loaded = texture.loadFromFile("CavePlatformerTileset/cave-platformer-tileset-16x16.png");
+
+        if (loaded)
+            texture.setSmooth(false);
+    }
+
+    bool isLoaded() const
+    {
+        return loaded;
+    }
+
+    void drawTile(sf::RenderWindow& window, int col, int row, float x, float y, float scale = 3.f) const
+    {
+        if (!loaded)
+            return;
+
+        sf::Sprite sprite(texture);
+        sprite.setTextureRect(sf::IntRect({col * 16, row * 16}, {16, 16}));
+        sprite.setPosition({x, y});
+        sprite.setScale({scale, scale});
+        window.draw(sprite);
+    }
+
+    void drawTileCustom(
+        sf::RenderWindow& window,
+        int col,
+        int row,
+        float x,
+        float y,
+        float sx,
+        float sy
+    ) const
+    {
+        if (!loaded)
+            return;
+
+        sf::Sprite sprite(texture);
+        sprite.setTextureRect(sf::IntRect({col * 16, row * 16}, {16, 16}));
+        sprite.setPosition({x, y});
+        sprite.setScale({sx, sy});
+        window.draw(sprite);
+    }
+};
 
 class Entity
 {
@@ -174,6 +232,9 @@ private:
     float moveOffset;
     bool movingRight;
     bool broken;
+    bool breaking;
+    float breakTimer;
+    sf::Vector2f stablePosition;
 
 public:
     Platform(float x, float y, float w, float h, PlatformType t)
@@ -185,9 +246,12 @@ public:
         moveOffset = 0.f;
         movingRight = true;
         broken = false;
+        breaking = false;
+        breakTimer = 0.f;
+        stablePosition = shape.getPosition();
 
         if (type == PlatformType::Normal)
-            shape.setFillColor(sf::Color(90, 90, 90));
+            shape.setFillColor(sf::Color(82, 61, 68));
 
         if (type == PlatformType::Moving)
             shape.setFillColor(sf::Color(70, 120, 200));
@@ -219,13 +283,81 @@ public:
                 if (moveOffset < 0.f)
                     movingRight = true;
             }
+
+            return;
+        }
+
+        if (type == PlatformType::Breakable)
+        {
+            if (breaking)
+            {
+                breakTimer -= dt;
+
+                float shakeOffset = sin(breakTimer * 120.f) * 3.5f;
+                shape.setPosition({stablePosition.x + shakeOffset, stablePosition.y});
+
+                if (breakTimer <= 0.f)
+                {
+                    broken = true;
+                    breaking = false;
+                    shape.setPosition(stablePosition);
+                }
+            }
+            else
+            {
+                shape.setPosition(stablePosition);
+            }
         }
     }
 
-    void draw(sf::RenderWindow& window)
+    void draw(sf::RenderWindow& window, const TileSet& tiles)
     {
-        if (!broken)
+        if (broken)
+            return;
+
+        if (!tiles.isLoaded())
+        {
             window.draw(shape);
+            return;
+        }
+
+        sf::Vector2f p = shape.getPosition();
+        sf::Vector2f s = shape.getSize();
+
+        int cols = static_cast<int>(ceil(s.x / TILE));
+        int rows = static_cast<int>(ceil(s.y / TILE));
+
+        for (int y = 0; y < rows; y++)
+        {
+            for (int x = 0; x < cols; x++)
+            {
+                float dx = p.x + x * TILE;
+                float dy = p.y + y * TILE;
+
+                if (type == PlatformType::Breakable)
+                {
+                    if (y == 0)
+                        tiles.drawTile(window, x % 4, 8, dx, dy);
+                    else
+                        tiles.drawTile(window, x % 2, 9, dx, dy);
+
+                    continue;
+                }
+
+                if (type == PlatformType::Moving)
+                {
+                    tiles.drawTile(window, 3 + (x % 2), 9, dx, dy);
+                    continue;
+                }
+
+                if (y == 0)
+                    tiles.drawTile(window, x % 4, 4, dx, dy);
+                else if (y == rows - 1)
+                    tiles.drawTile(window, x % 4, 7, dx, dy);
+                else
+                    tiles.drawTile(window, x % 4, 5 + (y % 2), dx, dy);
+            }
+        }
     }
 
     sf::FloatRect getBounds() const
@@ -243,9 +375,26 @@ public:
         return broken;
     }
 
+    bool isBreaking() const
+    {
+        return breaking;
+    }
+
+    void startBreaking()
+    {
+        if (type != PlatformType::Breakable || broken || breaking)
+            return;
+
+        stablePosition = shape.getPosition();
+        breaking = true;
+        breakTimer = 0.8f;
+    }
+
     void breakPlatform()
     {
         broken = true;
+        breaking = false;
+        shape.setPosition(stablePosition);
     }
 };
 
@@ -267,7 +416,7 @@ private:
     bool falling;
 
 public:
-    Trap(float x, float y, TrapType t)
+    Trap(float x, float y, TrapType t, float width = 96.f)
     {
         type = t;
         baseX = x;
@@ -280,7 +429,7 @@ public:
 
         if (type == TrapType::Spikes)
         {
-            body.setSize({60.f, 30.f});
+            body.setSize({width, 44.f});
             body.setFillColor(sf::Color(180, 180, 180));
         }
 
@@ -335,18 +484,30 @@ public:
         }
     }
 
-    void draw(sf::RenderWindow& window) override
+    void draw(sf::RenderWindow& window, const TileSet& tiles)
     {
         if (type == TrapType::Spikes)
         {
-            for (int i = 0; i < 5; i++)
+            if (tiles.isLoaded())
             {
-                sf::CircleShape spike(9.f, 3);
+                int count = static_cast<int>(ceil(body.getSize().x / TILE));
+
+                for (int i = 0; i < count; i++)
+                {
+                    tiles.drawTile(window, 6, 10, body.getPosition().x + i * TILE, body.getPosition().y);
+                }
+
+                return;
+            }
+
+            for (int i = 0; i < static_cast<int>(body.getSize().x / 24.f); i++)
+            {
+                sf::CircleShape spike(12.f, 3);
                 spike.setRotation(sf::degrees(180.f));
                 spike.setFillColor(sf::Color(190, 190, 190));
                 spike.setPosition({
-                    body.getPosition().x + i * 12.f,
-                    body.getPosition().y + 18.f
+                    body.getPosition().x + i * 24.f,
+                    body.getPosition().y + 22.f
                 });
                 window.draw(spike);
             }
@@ -363,13 +524,6 @@ public:
             int pulse = static_cast<int>((sin(moveTimer * 8.f) + 1.f) * 40.f);
             flame.setFillColor(sf::Color(220 + pulse / 2, 70 + pulse, 10));
             window.draw(flame);
-
-            sf::CircleShape top(18.f, 3);
-            top.setFillColor(sf::Color(255, 160, 40));
-            top.setRotation(sf::degrees(180.f));
-            top.setPosition({body.getPosition().x + 2.f, body.getPosition().y - 6.f});
-            window.draw(top);
-
             return;
         }
 
@@ -380,7 +534,6 @@ public:
             saw.setFillColor(sf::Color(210, 210, 210));
             saw.rotate(sf::degrees(moveTimer * 200.f));
             window.draw(saw);
-
             return;
         }
 
@@ -388,20 +541,20 @@ public:
     }
 };
 
-class Coin : public Entity
+class Diamond : public Entity
 {
 private:
     bool collected;
     float timer;
 
 public:
-    Coin(float x, float y)
+    Diamond(float x, float y)
     {
         collected = false;
         timer = 0.f;
 
-        body.setSize({20.f, 20.f});
-        body.setFillColor(sf::Color::Yellow);
+        body.setSize({32.f, 32.f});
+        body.setFillColor(sf::Color(50, 180, 255));
         body.setPosition({x, y});
     }
 
@@ -409,7 +562,25 @@ public:
     {
         timer += dt;
         body.setScale({1.f + sin(timer * 6.f) * 0.15f, 1.f});
-        body.rotate(sf::degrees(120.f * dt));
+    }
+
+    void draw(sf::RenderWindow& window, const TileSet& tiles)
+    {
+        if (collected)
+            return;
+
+        if (tiles.isLoaded())
+        {
+            float bounce = sin(timer * 4.f) * 4.f;
+            tiles.drawTile(window, 2, 10, body.getPosition().x - 8.f, body.getPosition().y - 8.f + bounce, 3.f);
+            return;
+        }
+
+        sf::CircleShape crystal(16.f, 4);
+        crystal.setRotation(sf::degrees(45.f));
+        crystal.setFillColor(sf::Color(40, 170, 255));
+        crystal.setPosition(body.getPosition());
+        window.draw(crystal);
     }
 
     bool isCollected() const
@@ -537,7 +708,7 @@ private:
     bool spritesReady;
 
     int hp;
-    int coins;
+    int diamonds;
 
     float speed;
     float gravity;
@@ -559,7 +730,7 @@ public:
     {
         body.setSize({40.f, 60.f});
         body.setFillColor(sf::Color::Transparent);
-        body.setPosition({100.f, 300.f});
+        body.setPosition({80.f, 560.f});
 
         velocity = {0.f, 0.f};
 
@@ -571,7 +742,7 @@ public:
         spritesReady = false;
 
         hp = 5;
-        coins = 0;
+        diamonds = 0;
 
         speed = 320.f;
         gravity = 1400.f;
@@ -599,24 +770,24 @@ public:
     {
         velocity.x = 0.f;
 
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A))
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::A))
         {
             velocity.x = -speed;
             faceRight = false;
         }
 
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::D))
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::D))
         {
             velocity.x = speed;
             faceRight = true;
         }
 
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::LShift))
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::LShift))
         {
             dash();
         }
 
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::F))
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::F))
         {
             attack();
         }
@@ -700,14 +871,14 @@ public:
         velocity.y += gravity * dt;
     }
 
-    void resolvePlatformCollision(const sf::FloatRect& platform)
+    bool resolvePlatformCollision(const sf::FloatRect& platform)
     {
         sf::FloatRect playerBounds = body.getGlobalBounds();
 
         float playerBottom = playerBounds.position.y + playerBounds.size.y;
         float platformTop = platform.position.y;
 
-        if (playerBottom <= platformTop + 35.f && velocity.y > 0)
+        if (playerBottom <= platformTop + 35.f && velocity.y >= 0)
         {
             body.setPosition({
                 body.getPosition().x,
@@ -717,7 +888,10 @@ public:
             velocity.y = 0.f;
             onGround = true;
             canDash = true;
+            return true;
         }
+
+        return false;
     }
 
     void update(float dt) override
@@ -824,6 +998,7 @@ public:
         };
 
         sf::Color tint = sf::Color::White;
+
         if (damageTimer > 0.f)
             tint = sf::Color(255, 120, 120);
 
@@ -861,18 +1036,66 @@ public:
         return hp;
     }
 
-    int getCoins() const
+    int getDiamonds() const
     {
-        return coins;
+        return diamonds;
     }
 
-    void addCoin()
+    void addDiamond()
     {
-        coins++;
+        diamonds++;
     }
 };
+
+void drawBackground(sf::RenderWindow& window, const TileSet& tiles, float levelWidth)
+{
+    sf::RectangleShape background;
+    background.setSize({levelWidth + 1280.f, 1000.f});
+    background.setFillColor(sf::Color(25, 19, 24));
+    window.draw(background);
+
+    sf::RectangleShape farWall;
+    farWall.setSize({levelWidth + 1280.f, 440.f});
+    farWall.setPosition({0.f, 120.f});
+    farWall.setFillColor(sf::Color(50, 31, 45));
+    window.draw(farWall);
+
+    for (int i = 0; i < static_cast<int>(levelWidth / 180.f); i++)
+    {
+        sf::CircleShape crystalGlow(9.f, 4);
+        crystalGlow.setRotation(sf::degrees(45.f));
+        crystalGlow.setFillColor(sf::Color(38, 87, 130));
+        crystalGlow.setPosition({
+            120.f + i * 180.f,
+            145.f + static_cast<float>((i % 5) * 58)
+        });
+        window.draw(crystalGlow);
+    }
+
+    if (tiles.isLoaded())
+    {
+        for (int x = 0; x < static_cast<int>(levelWidth / TILE) + 4; x++)
+        {
+            tiles.drawTile(window, x % 4, 0, x * TILE, 0.f);
+            tiles.drawTile(window, x % 4, 1, x * TILE, 48.f);
+        }
+
+        for (int i = 0; i < 11; i++)
+        {
+            float x = 300.f + i * 430.f;
+
+            tiles.drawTile(window, 4, 8, x, 96.f);
+            tiles.drawTile(window, 4, 9, x, 144.f);
+            tiles.drawTile(window, 4, 10, x, 192.f);
+        }
+
+    }
+}
+
 int main()
 {
+    const float levelWidth = 5400.f;
+
     sf::RenderWindow window(
         sf::VideoMode({1280u, 720u}),
         "Forgotten Dungeon"
@@ -880,6 +1103,7 @@ int main()
 
     window.setFramerateLimit(60);
 
+    TileSet tiles;
     Player player;
 
     sf::View camera;
@@ -889,35 +1113,67 @@ int main()
     vector<Platform> platforms;
     vector<Enemy> enemies;
     vector<Trap> traps;
-    vector<Coin> coins;
+    vector<Diamond> diamonds;
 
     bool gameOver = false;
     bool victory = false;
 
     float timeScale = 1.f;
 
-    platforms.push_back(Platform(0, 650, 2600, 80, PlatformType::Normal));
-    platforms.push_back(Platform(400, 520, 220, 30, PlatformType::Normal));
-    platforms.push_back(Platform(720, 460, 180, 30, PlatformType::Moving));
-    platforms.push_back(Platform(1050, 390, 180, 30, PlatformType::Breakable));
-    platforms.push_back(Platform(1350, 520, 240, 30, PlatformType::Normal));
-    platforms.push_back(Platform(1750, 450, 200, 30, PlatformType::Moving));
-    platforms.push_back(Platform(2100, 560, 260, 30, PlatformType::Normal));
+    // Main cave road, variant 2: jump -> spikes -> double jump -> dash -> final climb.
+    platforms.push_back(Platform(0, 620, 650, 96, PlatformType::Normal));
+    platforms.push_back(Platform(830, 620, 340, 96, PlatformType::Normal));
 
-    enemies.push_back(Enemy(700, 600));
-    enemies.push_back(Enemy(1450, 600));
-    enemies.push_back(Enemy(2000, 510));
+    platforms.push_back(Platform(1240, 580, 280, 136, PlatformType::Normal));
+    platforms.push_back(Platform(1570, 540, 300, 176, PlatformType::Normal));
 
-    traps.push_back(Trap(1120, 620, TrapType::Spikes));
-    traps.push_back(Trap(1540, 590, TrapType::Fire));
-    traps.push_back(Trap(1780, 600, TrapType::MovingSaw));
-    traps.push_back(Trap(1900, 260, TrapType::FallingBlock));
+    platforms.push_back(Platform(2140, 430, 360, 286, PlatformType::Normal));
+    platforms.push_back(Platform(2600, 520, 280, 196, PlatformType::Normal));
 
-    coins.push_back(Coin(450, 480));
-    coins.push_back(Coin(760, 420));
-    coins.push_back(Coin(1080, 350));
-    coins.push_back(Coin(1400, 480));
-    coins.push_back(Coin(2150, 520));
+    platforms.push_back(Platform(3040, 590, 280, 126, PlatformType::Normal));
+    platforms.push_back(Platform(3700, 590, 430, 126, PlatformType::Normal));
+
+    platforms.push_back(Platform(4240, 540, 300, 176, PlatformType::Normal));
+    platforms.push_back(Platform(4610, 500, 300, 216, PlatformType::Normal));
+    platforms.push_back(Platform(5000, 620, 480, 96, PlatformType::Normal));
+
+    platforms.push_back(Platform(1040, 500, 150, 48, PlatformType::Breakable));
+    platforms.push_back(Platform(1910, 500, 150, 48, PlatformType::Breakable));
+    platforms.push_back(Platform(3420, 500, 160, 48, PlatformType::Breakable));
+
+    // Temporary mode: enemies and old traps are kept in code, but not spawned on the level.
+    // enemies.push_back(Enemy(...));
+    // traps.push_back(Trap(..., TrapType::Fire));
+    // traps.push_back(Trap(..., TrapType::MovingSaw));
+    // traps.push_back(Trap(..., TrapType::FallingBlock));
+
+    traps.push_back(Trap(940, 572, TrapType::Spikes, 144.f));
+    traps.push_back(Trap(1710, 492, TrapType::Spikes, 96.f));
+    traps.push_back(Trap(3920, 542, TrapType::Spikes, 144.f));
+    traps.push_back(Trap(4750, 452, TrapType::Spikes, 96.f));
+
+    diamonds.push_back(Diamond(250, 570));
+    diamonds.push_back(Diamond(470, 570));
+    diamonds.push_back(Diamond(910, 560));
+    diamonds.push_back(Diamond(1090, 455));
+
+    diamonds.push_back(Diamond(1320, 530));
+    diamonds.push_back(Diamond(1660, 490));
+    diamonds.push_back(Diamond(1810, 490));
+
+    diamonds.push_back(Diamond(2180, 380));
+    diamonds.push_back(Diamond(2320, 380));
+    diamonds.push_back(Diamond(2440, 380));
+
+    diamonds.push_back(Diamond(2700, 470));
+    diamonds.push_back(Diamond(3120, 540));
+    diamonds.push_back(Diamond(3810, 540));
+    diamonds.push_back(Diamond(4020, 540));
+
+    diamonds.push_back(Diamond(4310, 490));
+    diamonds.push_back(Diamond(4680, 450));
+    diamonds.push_back(Diamond(5080, 570));
+    diamonds.push_back(Diamond(5220, 570));
 
     sf::Font font;
     bool hasFont = font.openFromFile("/System/Library/Fonts/Helvetica.ttc");
@@ -937,12 +1193,12 @@ int main()
 
             if (const auto* key = event->getIf<sf::Event::KeyPressed>())
             {
-                if (key->code == sf::Keyboard::Key::Space)
+                if (key->scancode == sf::Keyboard::Scancode::Space)
                 {
                     player.jump();
                 }
 
-                if (key->code == sf::Keyboard::Key::Q)
+                if (key->scancode == sf::Keyboard::Scancode::Q)
                 {
                     timeScale = 0.35f;
                 }
@@ -950,7 +1206,7 @@ int main()
 
             if (const auto* key = event->getIf<sf::Event::KeyReleased>())
             {
-                if (key->code == sf::Keyboard::Key::Q)
+                if (key->scancode == sf::Keyboard::Scancode::Q)
                 {
                     timeScale = 1.f;
                 }
@@ -967,8 +1223,8 @@ int main()
 
             if (playerPos.x < 640.f)
                 camera.setCenter({640.f, 360.f});
-            else if (playerPos.x > 1960.f)
-                camera.setCenter({1960.f, 360.f});
+            else if (playerPos.x > levelWidth - 640.f)
+                camera.setCenter({levelWidth - 640.f, 360.f});
             else
                 camera.setCenter({playerPos.x, 360.f});
 
@@ -978,10 +1234,10 @@ int main()
 
                 if (!p.isBroken() && touch(player.getBounds(), p.getBounds()))
                 {
-                    player.resolvePlatformCollision(p.getBounds());
+                    bool landed = player.resolvePlatformCollision(p.getBounds());
 
-                    if (p.getType() == PlatformType::Breakable)
-                        p.breakPlatform();
+                    if (landed && p.getType() == PlatformType::Breakable)
+                        p.startBreaking();
                 }
             }
 
@@ -1019,21 +1275,21 @@ int main()
                 }
             }
 
-            for (auto& c : coins)
+            for (auto& d : diamonds)
             {
-                c.update(dt);
+                d.update(dt);
 
-                if (!c.isCollected() && touch(player.getBounds(), c.getBounds()))
+                if (!d.isCollected() && touch(player.getBounds(), d.getBounds()))
                 {
-                    c.collect();
-                    player.addCoin();
+                    d.collect();
+                    player.addDiamond();
                 }
             }
 
             if (player.getHP() <= 0)
                 gameOver = true;
 
-            if (player.getPosition().x > 2320.f)
+            if (player.getPosition().x > 5250.f)
                 victory = true;
         }
 
@@ -1041,59 +1297,32 @@ int main()
 
         window.setView(camera);
 
-        sf::RectangleShape background;
-        background.setSize({4000.f, 1000.f});
-        background.setFillColor(sf::Color(30, 25, 20));
-        window.draw(background);
-
-        for (int i = 0; i < 25; i++)
-        {
-            sf::CircleShape crystal(10.f, 4);
-            crystal.setRotation(sf::degrees(45.f));
-            crystal.setFillColor(sf::Color(120, 0, 200));
-            crystal.setPosition({
-                180.f * i,
-                160.f + static_cast<float>((i % 4) * 90)
-            });
-            window.draw(crystal);
-        }
-
-        for (int i = 0; i < 10; i++)
-        {
-            sf::RectangleShape column;
-            column.setSize({35.f, 300.f});
-            column.setFillColor(sf::Color(45, 38, 34));
-            column.setPosition({250.f + i * 300.f, 350.f});
-            window.draw(column);
-        }
+        drawBackground(window, tiles, levelWidth);
 
         for (auto& p : platforms)
-            p.draw(window);
+            p.draw(window, tiles);
 
         for (auto& t : traps)
-            t.draw(window);
+            t.draw(window, tiles);
 
         for (auto& e : enemies)
             e.draw(window);
 
-        for (auto& c : coins)
-        {
-            if (!c.isCollected())
-                c.draw(window);
-        }
+        for (auto& d : diamonds)
+            d.draw(window, tiles);
 
         player.draw(window);
 
         sf::RectangleShape treasureBase;
         treasureBase.setSize({70.f, 45.f});
         treasureBase.setFillColor(sf::Color(180, 100, 20));
-        treasureBase.setPosition({2380.f, 605.f});
+        treasureBase.setPosition({5280.f, 575.f});
         window.draw(treasureBase);
 
         sf::RectangleShape treasureGold;
         treasureGold.setSize({58.f, 15.f});
         treasureGold.setFillColor(sf::Color(255, 215, 0));
-        treasureGold.setPosition({2386.f, 590.f});
+        treasureGold.setPosition({5286.f, 560.f});
         window.draw(treasureGold);
 
         window.setView(window.getDefaultView());
@@ -1108,12 +1337,12 @@ int main()
 
         if (hasFont)
         {
-            sf::Text coinText(font, "Coins: " + to_string(player.getCoins()), 28);
-            coinText.setFillColor(sf::Color::White);
-            coinText.setPosition({20.f, 60.f});
-            window.draw(coinText);
+            sf::Text diamondText(font, "Diamonds: " + to_string(player.getDiamonds()), 28);
+            diamondText.setFillColor(sf::Color::White);
+            diamondText.setPosition({20.f, 60.f});
+            window.draw(diamondText);
 
-            sf::Text abilityText(font, "A/D move | Space jump | Shift dash | F dagger | Q slow time", 20);
+            sf::Text abilityText(font, "A/D move | Space jump | Shift dash | F hand attack | Q slow time", 20);
             abilityText.setFillColor(sf::Color(220, 220, 220));
             abilityText.setPosition({20.f, 100.f});
             window.draw(abilityText);
