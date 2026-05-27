@@ -146,6 +146,8 @@ private:
     sf::Texture texture;
     int frameW;
     int frameH;
+    int cols;
+    int startIndex;
     int frames;
     int current;
     float timer;
@@ -157,6 +159,8 @@ public:
     {
         frameW = 0;
         frameH = 0;
+        cols = 1;
+        startIndex = 0;
         frames = 0;
         current = 0;
         timer = 0.f;
@@ -180,9 +184,38 @@ public:
         timer = 0.f;
 
         sf::Vector2u size = texture.getSize();
-        int cols = static_cast<int>(size.x) / frameW;
-        int rows = static_cast<int>(size.y) / frameH;
+        cols = max(1, static_cast<int>(size.x) / frameW);
+        int rows = max(1, static_cast<int>(size.y) / frameH);
+
+        startIndex = 0;
         frames = max(1, cols * rows);
+
+        loaded = true;
+        return true;
+    }
+
+    bool loadRow(const string& path, int w, int h, int row, int frameCount, float framesPerSecond)
+    {
+        if (!texture.loadFromFile(path))
+        {
+            loaded = false;
+            return false;
+        }
+
+        texture.setSmooth(false);
+        frameW = w;
+        frameH = h;
+        fps = framesPerSecond;
+        current = 0;
+        timer = 0.f;
+
+        sf::Vector2u size = texture.getSize();
+        cols = max(1, static_cast<int>(size.x) / frameW);
+        int rows = max(1, static_cast<int>(size.y) / frameH);
+
+        row = max(0, min(row, rows - 1));
+        startIndex = row * cols;
+        frames = max(1, min(frameCount, cols));
 
         loaded = true;
         return true;
@@ -213,10 +246,9 @@ public:
         if (!loaded)
             return;
 
-        sf::Vector2u size = texture.getSize();
-        int cols = max(1, static_cast<int>(size.x) / frameW);
-        int col = current % cols;
-        int row = current / cols;
+        int index = startIndex + current;
+        int col = index % cols;
+        int row = index / cols;
 
         sf::Sprite sprite(texture);
         sprite.setTextureRect(sf::IntRect({col * frameW, row * frameH}, {frameW, frameH}));
@@ -229,6 +261,7 @@ public:
 
         sprite.setPosition(bottomCenter);
         sprite.setColor(color);
+
         window.draw(sprite);
     }
 };
@@ -857,11 +890,13 @@ private:
     float hurtTimer;
     float startY;
     float flyTimer;
+    float patrolLeft;
+    float patrolRight;
     SpriteSheetAnimation anim;
     bool spriteReady;
 
 public:
-    Enemy(float x, float y, EnemyType t)
+    Enemy(float x, float y, EnemyType t, float leftBorder = -1.f, float rightBorder = -1.f)
     {
         type = t;
         alive = true;
@@ -873,51 +908,58 @@ public:
 
         if (type == EnemyType::Snake)
         {
+            body.setSize({82.f, 44.f});
             body.setPosition({x, y});
-            body.setSize({58.f, 34.f});
             body.setFillColor(sf::Color(60, 170, 70));
+
             hp = 2;
-            speed = 85.f;
+            speed = 80.f;
             startY = y;
-            spriteReady = anim.load("bat_and_snake/snake_spritesheet(64x64).png", 64, 64, 9.f);
+
+            patrolLeft = (leftBorder >= 0.f) ? leftBorder : x - 180.f;
+            patrolRight = (rightBorder >= 0.f) ? rightBorder : x + 180.f;
+
+            spriteReady = anim.loadRow(
+                "bat_and_snake/snake_spritesheet(64x64).png",
+                64,
+                64,
+                4,
+                6,
+                8.f
+            );
         }
         else
         {
+            body.setSize({81.f, 63.f});
             body.setPosition({x, y});
-            body.setSize({54.f, 42.f});
             body.setFillColor(sf::Color(120, 70, 160));
+
             hp = 2;
-            speed = 105.f;
+            speed = 95.f;
             startY = y;
-            spriteReady = anim.load("bat_and_snake/bat_spritesheet(80x80).png", 80, 80, 10.f);
+
+            patrolLeft = (leftBorder >= 0.f) ? leftBorder : x - 240.f;
+            patrolRight = (rightBorder >= 0.f) ? rightBorder : x + 240.f;
+
+            spriteReady = anim.loadRow(
+                "bat_and_snake/bat_spritesheet(80x80).png",
+                80,
+                80,
+                0,
+                6,
+                9.f
+            );
         }
+
+        velocity.x = speed;
     }
 
-    void updateAI(sf::Vector2f playerPos)
+    void updateAI(sf::Vector2f)
     {
         if (!alive)
             return;
 
-        float dx = playerPos.x - body.getPosition().x;
-        float detect = (type == EnemyType::Bat) ? 520.f : 390.f;
-
-        if (abs(dx) < detect)
-        {
-            if (dx < 0.f)
-            {
-                velocity.x = -speed;
-                faceRight = false;
-            }
-            else
-            {
-                velocity.x = speed;
-                faceRight = true;
-            }
-        }
-        else
-        {
-            velocity.x = sin(flyTimer * 1.3f + body.getPosition().x * 0.01f) * speed * 0.45f;
-        }
+        velocity.x = faceRight ? speed : -speed;
     }
 
     void update(float dt) override
@@ -930,15 +972,28 @@ public:
 
         flyTimer += dt;
 
+        float nextX = body.getPosition().x + velocity.x * dt;
+
+        if (nextX < patrolLeft)
+        {
+            nextX = patrolLeft;
+            faceRight = true;
+        }
+
+        if (nextX + body.getSize().x > patrolRight)
+        {
+            nextX = patrolRight - body.getSize().x;
+            faceRight = false;
+        }
+
         if (type == EnemyType::Snake)
         {
-            body.move({velocity.x * dt, 0.f});
+            body.setPosition({nextX, startY});
         }
         else
         {
-            body.move({velocity.x * dt, 0.f});
-            float wave = sin(flyTimer * 3.5f) * 14.f;
-            body.setPosition({body.getPosition().x, startY + wave});
+            float wave = sin(flyTimer * 3.2f) * 12.f;
+            body.setPosition({nextX, startY + wave});
         }
 
         anim.update(dt);
@@ -958,8 +1013,18 @@ public:
         {
             sf::Vector2f p = body.getPosition();
             sf::Vector2f s = body.getSize();
-            float scale = (type == EnemyType::Bat) ? 0.9f : 0.95f;
-            anim.draw(window, {p.x + s.x / 2.f, p.y + s.y + 13.f}, faceRight, scale, color);
+
+            if (type == EnemyType::Bat)
+            {
+                anim.draw(window, {p.x + s.x / 2.f, p.y + s.y + 16.f}, faceRight, 1.35f, color);
+            }
+            else
+            {
+                // The snake spritesheet is drawn facing the opposite direction by default,
+                // so for snakes only the horizontal flip is inverted.
+                anim.draw(window, {p.x + s.x / 2.f, p.y + s.y + 18.f}, !faceRight, 1.42f, color);
+            }
+
             return;
         }
 
@@ -973,7 +1038,7 @@ public:
         }
         else
         {
-            sf::CircleShape bat(24.f);
+            sf::CircleShape bat(32.f);
             bat.setPosition(body.getPosition());
             bat.setFillColor(hurtTimer > 0.f ? sf::Color::Red : sf::Color(120, 70, 160));
             window.draw(bat);
@@ -1450,20 +1515,21 @@ int main()
     platforms.push_back(Platform(1910, 500, 150, 48, PlatformType::Breakable));
     platforms.push_back(Platform(3420, 500, 160, 48, PlatformType::Breakable));
 
-    // Monsters are placed evenly across the level: snakes patrol the road, bats fly above gaps and platforms.
-    enemies.push_back(Enemy(920, 586, EnemyType::Snake));
-    enemies.push_back(Enemy(1460, 546, EnemyType::Snake));
-    enemies.push_back(Enemy(2290, 396, EnemyType::Snake));
-    enemies.push_back(Enemy(2780, 486, EnemyType::Snake));
-    enemies.push_back(Enemy(3890, 556, EnemyType::Snake));
-    enemies.push_back(Enemy(4690, 466, EnemyType::Snake));
-    enemies.push_back(Enemy(5120, 586, EnemyType::Snake));
+    // Monsters are placed evenly across the level.
+    // Snakes patrol only safe platform sections and do not cross gaps or spikes.
+    enemies.push_back(Enemy(1310, 536, EnemyType::Snake, 1240, 1520));
+    enemies.push_back(Enemy(2220, 386, EnemyType::Snake, 2140, 2500));
+    enemies.push_back(Enemy(2680, 476, EnemyType::Snake, 2600, 2880));
+    enemies.push_back(Enemy(3100, 546, EnemyType::Snake, 3040, 3320));
+    enemies.push_back(Enemy(4310, 496, EnemyType::Snake, 4240, 4540));
+    enemies.push_back(Enemy(5100, 576, EnemyType::Snake, 5000, 5480));
 
-    enemies.push_back(Enemy(720, 390, EnemyType::Bat));
-    enemies.push_back(Enemy(1780, 355, EnemyType::Bat));
-    enemies.push_back(Enemy(2870, 360, EnemyType::Bat));
-    enemies.push_back(Enemy(3560, 420, EnemyType::Bat));
-    enemies.push_back(Enemy(4440, 335, EnemyType::Bat));
+    // Bats fly in simple horizontal patrols above the road.
+    enemies.push_back(Enemy(710, 360, EnemyType::Bat, 580, 980));
+    enemies.push_back(Enemy(1780, 330, EnemyType::Bat, 1580, 2050));
+    enemies.push_back(Enemy(2870, 350, EnemyType::Bat, 2600, 3230));
+    enemies.push_back(Enemy(3560, 390, EnemyType::Bat, 3350, 3910));
+    enemies.push_back(Enemy(4440, 320, EnemyType::Bat, 4200, 4920));
 
     // Old traps are kept in code, but fire, saw and falling blocks are not spawned right now.
     // traps.push_back(Trap(..., TrapType::Fire));
@@ -1480,7 +1546,7 @@ int main()
     diamonds.push_back(Diamond(520, 570));
 
     diamonds.push_back(Diamond(885, 560));
-    diamonds.push_back(Diamond(1035, 455));
+    diamonds.push_back(Diamond(1088, 455));
     diamonds.push_back(Diamond(1140, 455));
 
     diamonds.push_back(Diamond(1285, 530));
@@ -1501,13 +1567,13 @@ int main()
     diamonds.push_back(Diamond(3435, 455));
     diamonds.push_back(Diamond(3555, 455));
     diamonds.push_back(Diamond(3780, 540));
-    diamonds.push_back(Diamond(3945, 540));
-    diamonds.push_back(Diamond(4085, 540));
+    diamonds.push_back(Diamond(3860, 515));
+    diamonds.push_back(Diamond(4120, 515));
 
     diamonds.push_back(Diamond(4275, 490));
     diamonds.push_back(Diamond(4425, 490));
     diamonds.push_back(Diamond(4650, 450));
-    diamonds.push_back(Diamond(4800, 450));
+    diamonds.push_back(Diamond(4890, 450));
 
     diamonds.push_back(Diamond(5040, 570));
     diamonds.push_back(Diamond(5180, 570));
