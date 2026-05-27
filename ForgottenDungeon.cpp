@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <iostream>
 #include <cctype>
+#include <algorithm>
 
 using namespace std;
 
@@ -135,6 +136,99 @@ public:
         sprite.setPosition(bottomCenter);
         sprite.setColor(color);
 
+        window.draw(sprite);
+    }
+};
+
+class SpriteSheetAnimation
+{
+private:
+    sf::Texture texture;
+    int frameW;
+    int frameH;
+    int frames;
+    int current;
+    float timer;
+    float fps;
+    bool loaded;
+
+public:
+    SpriteSheetAnimation()
+    {
+        frameW = 0;
+        frameH = 0;
+        frames = 0;
+        current = 0;
+        timer = 0.f;
+        fps = 8.f;
+        loaded = false;
+    }
+
+    bool load(const string& path, int w, int h, float framesPerSecond)
+    {
+        if (!texture.loadFromFile(path))
+        {
+            loaded = false;
+            return false;
+        }
+
+        texture.setSmooth(false);
+        frameW = w;
+        frameH = h;
+        fps = framesPerSecond;
+        current = 0;
+        timer = 0.f;
+
+        sf::Vector2u size = texture.getSize();
+        int cols = static_cast<int>(size.x) / frameW;
+        int rows = static_cast<int>(size.y) / frameH;
+        frames = max(1, cols * rows);
+
+        loaded = true;
+        return true;
+    }
+
+    bool isLoaded() const
+    {
+        return loaded;
+    }
+
+    void update(float dt)
+    {
+        if (!loaded || frames <= 1)
+            return;
+
+        timer += dt;
+        float frameTime = 1.f / fps;
+
+        while (timer >= frameTime)
+        {
+            timer -= frameTime;
+            current = (current + 1) % frames;
+        }
+    }
+
+    void draw(sf::RenderWindow& window, sf::Vector2f bottomCenter, bool faceRight, float scale, sf::Color color = sf::Color::White) const
+    {
+        if (!loaded)
+            return;
+
+        sf::Vector2u size = texture.getSize();
+        int cols = max(1, static_cast<int>(size.x) / frameW);
+        int col = current % cols;
+        int row = current / cols;
+
+        sf::Sprite sprite(texture);
+        sprite.setTextureRect(sf::IntRect({col * frameW, row * frameH}, {frameW, frameH}));
+        sprite.setOrigin({static_cast<float>(frameW) / 2.f, static_cast<float>(frameH)});
+
+        if (faceRight)
+            sprite.setScale({scale, scale});
+        else
+            sprite.setScale({-scale, scale});
+
+        sprite.setPosition(bottomCenter);
+        sprite.setColor(color);
         window.draw(sprite);
     }
 };
@@ -746,27 +840,57 @@ public:
     }
 };
 
+enum class EnemyType
+{
+    Snake,
+    Bat
+};
+
 class Enemy : public Entity
 {
 private:
+    EnemyType type;
     int hp;
     float speed;
     bool alive;
+    bool faceRight;
     float hurtTimer;
+    float startY;
+    float flyTimer;
+    SpriteSheetAnimation anim;
+    bool spriteReady;
 
 public:
-    Enemy(float x, float y)
+    Enemy(float x, float y, EnemyType t)
     {
-        body.setPosition({x, y});
-        body.setSize({40.f, 40.f});
-        body.setFillColor(sf::Color(120, 220, 120));
-
+        type = t;
+        alive = true;
+        faceRight = true;
+        hurtTimer = 0.f;
+        flyTimer = 0.f;
+        spriteReady = false;
         velocity = {0.f, 0.f};
 
-        hp = 2;
-        speed = 120.f;
-        alive = true;
-        hurtTimer = 0.f;
+        if (type == EnemyType::Snake)
+        {
+            body.setPosition({x, y});
+            body.setSize({58.f, 34.f});
+            body.setFillColor(sf::Color(60, 170, 70));
+            hp = 2;
+            speed = 85.f;
+            startY = y;
+            spriteReady = anim.load("bat_and_snake/snake_spritesheet(64x64).png", 64, 64, 9.f);
+        }
+        else
+        {
+            body.setPosition({x, y});
+            body.setSize({54.f, 42.f});
+            body.setFillColor(sf::Color(120, 70, 160));
+            hp = 2;
+            speed = 105.f;
+            startY = y;
+            spriteReady = anim.load("bat_and_snake/bat_spritesheet(80x80).png", 80, 80, 10.f);
+        }
     }
 
     void updateAI(sf::Vector2f playerPos)
@@ -775,17 +899,24 @@ public:
             return;
 
         float dx = playerPos.x - body.getPosition().x;
+        float detect = (type == EnemyType::Bat) ? 520.f : 390.f;
 
-        if (abs(dx) < 360.f)
+        if (abs(dx) < detect)
         {
-            if (dx < 0)
+            if (dx < 0.f)
+            {
                 velocity.x = -speed;
+                faceRight = false;
+            }
             else
+            {
                 velocity.x = speed;
+                faceRight = true;
+            }
         }
         else
         {
-            velocity.x = 0.f;
+            velocity.x = sin(flyTimer * 1.3f + body.getPosition().x * 0.01f) * speed * 0.45f;
         }
     }
 
@@ -797,7 +928,20 @@ public:
         if (hurtTimer > 0.f)
             hurtTimer -= dt;
 
-        body.move({velocity.x * dt, velocity.y * dt});
+        flyTimer += dt;
+
+        if (type == EnemyType::Snake)
+        {
+            body.move({velocity.x * dt, 0.f});
+        }
+        else
+        {
+            body.move({velocity.x * dt, 0.f});
+            float wave = sin(flyTimer * 3.5f) * 14.f;
+            body.setPosition({body.getPosition().x, startY + wave});
+        }
+
+        anim.update(dt);
     }
 
     void draw(sf::RenderWindow& window) override
@@ -805,30 +949,35 @@ public:
         if (!alive)
             return;
 
-        sf::CircleShape slime(22.f);
+        sf::Color color = sf::Color::White;
 
         if (hurtTimer > 0.f)
-            slime.setFillColor(sf::Color::Red);
+            color = sf::Color(255, 90, 90);
+
+        if (spriteReady)
+        {
+            sf::Vector2f p = body.getPosition();
+            sf::Vector2f s = body.getSize();
+            float scale = (type == EnemyType::Bat) ? 0.9f : 0.95f;
+            anim.draw(window, {p.x + s.x / 2.f, p.y + s.y + 13.f}, faceRight, scale, color);
+            return;
+        }
+
+        if (type == EnemyType::Snake)
+        {
+            sf::RectangleShape snake;
+            snake.setSize(body.getSize());
+            snake.setPosition(body.getPosition());
+            snake.setFillColor(hurtTimer > 0.f ? sf::Color::Red : sf::Color(60, 170, 70));
+            window.draw(snake);
+        }
         else
-            slime.setFillColor(sf::Color(120, 220, 120));
-
-        slime.setPosition(body.getPosition());
-        window.draw(slime);
-
-        sf::CircleShape eye(3.f);
-        eye.setFillColor(sf::Color::Black);
-
-        eye.setPosition({
-            body.getPosition().x + 10.f,
-            body.getPosition().y + 10.f
-        });
-        window.draw(eye);
-
-        eye.setPosition({
-            body.getPosition().x + 25.f,
-            body.getPosition().y + 10.f
-        });
-        window.draw(eye);
+        {
+            sf::CircleShape bat(24.f);
+            bat.setPosition(body.getPosition());
+            bat.setFillColor(hurtTimer > 0.f ? sf::Color::Red : sf::Color(120, 70, 160));
+            window.draw(bat);
+        }
     }
 
     bool isAlive() const
@@ -1301,8 +1450,22 @@ int main()
     platforms.push_back(Platform(1910, 500, 150, 48, PlatformType::Breakable));
     platforms.push_back(Platform(3420, 500, 160, 48, PlatformType::Breakable));
 
-    // Temporary mode: enemies and old traps are kept in code, but not spawned on the level.
-    // enemies.push_back(Enemy(...));
+    // Monsters are placed evenly across the level: snakes patrol the road, bats fly above gaps and platforms.
+    enemies.push_back(Enemy(920, 586, EnemyType::Snake));
+    enemies.push_back(Enemy(1460, 546, EnemyType::Snake));
+    enemies.push_back(Enemy(2290, 396, EnemyType::Snake));
+    enemies.push_back(Enemy(2780, 486, EnemyType::Snake));
+    enemies.push_back(Enemy(3890, 556, EnemyType::Snake));
+    enemies.push_back(Enemy(4690, 466, EnemyType::Snake));
+    enemies.push_back(Enemy(5120, 586, EnemyType::Snake));
+
+    enemies.push_back(Enemy(720, 390, EnemyType::Bat));
+    enemies.push_back(Enemy(1780, 355, EnemyType::Bat));
+    enemies.push_back(Enemy(2870, 360, EnemyType::Bat));
+    enemies.push_back(Enemy(3560, 420, EnemyType::Bat));
+    enemies.push_back(Enemy(4440, 335, EnemyType::Bat));
+
+    // Old traps are kept in code, but fire, saw and falling blocks are not spawned right now.
     // traps.push_back(Trap(..., TrapType::Fire));
     // traps.push_back(Trap(..., TrapType::MovingSaw));
     // traps.push_back(Trap(..., TrapType::FallingBlock));
@@ -1312,28 +1475,43 @@ int main()
     traps.push_back(Trap(3920, 542, TrapType::Spikes, 144.f));
     traps.push_back(Trap(4750, 452, TrapType::Spikes, 96.f));
 
-    diamonds.push_back(Diamond(250, 570));
-    diamonds.push_back(Diamond(470, 570));
-    diamonds.push_back(Diamond(910, 560));
-    diamonds.push_back(Diamond(1090, 455));
+    diamonds.push_back(Diamond(210, 570));
+    diamonds.push_back(Diamond(360, 570));
+    diamonds.push_back(Diamond(520, 570));
 
-    diamonds.push_back(Diamond(1320, 530));
-    diamonds.push_back(Diamond(1660, 490));
-    diamonds.push_back(Diamond(1810, 490));
+    diamonds.push_back(Diamond(885, 560));
+    diamonds.push_back(Diamond(1035, 455));
+    diamonds.push_back(Diamond(1140, 455));
 
-    diamonds.push_back(Diamond(2180, 380));
-    diamonds.push_back(Diamond(2320, 380));
-    diamonds.push_back(Diamond(2440, 380));
+    diamonds.push_back(Diamond(1285, 530));
+    diamonds.push_back(Diamond(1425, 530));
+    diamonds.push_back(Diamond(1615, 490));
+    diamonds.push_back(Diamond(1785, 490));
 
-    diamonds.push_back(Diamond(2700, 470));
-    diamonds.push_back(Diamond(3120, 540));
-    diamonds.push_back(Diamond(3810, 540));
-    diamonds.push_back(Diamond(4020, 540));
+    diamonds.push_back(Diamond(1990, 455));
+    diamonds.push_back(Diamond(2160, 380));
+    diamonds.push_back(Diamond(2295, 380));
+    diamonds.push_back(Diamond(2430, 380));
 
-    diamonds.push_back(Diamond(4310, 490));
-    diamonds.push_back(Diamond(4680, 450));
-    diamonds.push_back(Diamond(5080, 570));
-    diamonds.push_back(Diamond(5220, 570));
+    diamonds.push_back(Diamond(2635, 470));
+    diamonds.push_back(Diamond(2795, 470));
+    diamonds.push_back(Diamond(3095, 540));
+    diamonds.push_back(Diamond(3245, 540));
+
+    diamonds.push_back(Diamond(3435, 455));
+    diamonds.push_back(Diamond(3555, 455));
+    diamonds.push_back(Diamond(3780, 540));
+    diamonds.push_back(Diamond(3945, 540));
+    diamonds.push_back(Diamond(4085, 540));
+
+    diamonds.push_back(Diamond(4275, 490));
+    diamonds.push_back(Diamond(4425, 490));
+    diamonds.push_back(Diamond(4650, 450));
+    diamonds.push_back(Diamond(4800, 450));
+
+    diamonds.push_back(Diamond(5040, 570));
+    diamonds.push_back(Diamond(5180, 570));
+    diamonds.push_back(Diamond(5320, 570));
 
     sf::Font font;
     bool hasFont = font.openFromFile("/System/Library/Fonts/Helvetica.ttc");
