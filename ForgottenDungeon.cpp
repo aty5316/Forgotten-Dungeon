@@ -468,6 +468,115 @@ public:
     }
 };
 
+
+class HeartHudIcon
+{
+private:
+    sf::Texture texture;
+    bool loaded;
+    string loadedPath;
+
+    bool isPng(const filesystem::path& path) const
+    {
+        string ext = path.extension().string();
+        for (char& c : ext)
+            c = static_cast<char>(tolower(c));
+        return ext == ".png";
+    }
+
+    bool looksLikeHeart(string name) const
+    {
+        for (char& c : name)
+            c = static_cast<char>(tolower(c));
+        return name.find("heart") != string::npos || name.find("hp") != string::npos;
+    }
+
+public:
+    HeartHudIcon()
+    {
+        loaded = false;
+
+        vector<string> exactPaths = {
+            "heart pixel art/heart.png",
+            "heart pixel art/Heart.png",
+            "heart pixel art/heart_pixel_art.png",
+            "heart pixel art/full_heart.png",
+            "Heart Pixel Art/heart.png",
+            "assets/heart.png"
+        };
+
+        for (const string& path : exactPaths)
+        {
+            if (filesystem::exists(path) && texture.loadFromFile(path))
+            {
+                texture.setSmooth(false);
+                loaded = true;
+                loadedPath = path;
+                return;
+            }
+        }
+
+        vector<string> folders = {
+            "heart pixel art",
+            "Heart Pixel Art",
+            "assets",
+            "."
+        };
+
+        for (const string& folder : folders)
+        {
+            if (!filesystem::exists(folder))
+                continue;
+
+            for (const auto& entry : filesystem::recursive_directory_iterator(folder))
+            {
+                if (!entry.is_regular_file())
+                    continue;
+
+                filesystem::path path = entry.path();
+
+                if (!isPng(path))
+                    continue;
+
+                if (!looksLikeHeart(path.filename().string()))
+                    continue;
+
+                if (texture.loadFromFile(path.string()))
+                {
+                    texture.setSmooth(false);
+                    loaded = true;
+                    loadedPath = path.string();
+                    return;
+                }
+            }
+        }
+    }
+
+    bool isLoaded() const
+    {
+        return loaded;
+    }
+
+    void draw(sf::RenderWindow& window, sf::Vector2f position, float targetSize = 26.f) const
+    {
+        if (!loaded)
+            return;
+
+        sf::Sprite sprite(texture);
+        sf::Vector2u size = texture.getSize();
+
+        if (size.x == 0 || size.y == 0)
+            return;
+
+        float scale = targetSize / static_cast<float>(max(size.x, size.y));
+
+        sprite.setScale({scale, scale});
+        sprite.setPosition(position);
+
+        window.draw(sprite);
+    }
+};
+
 class Entity
 {
 protected:
@@ -1478,6 +1587,7 @@ int main()
 
     TileSet tiles;
     WorldBackground backgroundImage;
+    HeartHudIcon heartIcon;
     Player player;
 
     sf::View camera;
@@ -1733,10 +1843,17 @@ int main()
 
         for (int i = 0; i < player.getHP(); i++)
         {
-            sf::CircleShape heart(12.f);
-            heart.setFillColor(sf::Color::Red);
-            heart.setPosition({20.f + i * 35.f, 20.f});
-            window.draw(heart);
+            if (heartIcon.isLoaded())
+            {
+                heartIcon.draw(window, {20.f + i * 34.f, 18.f}, 28.f);
+            }
+            else
+            {
+                sf::CircleShape heart(12.f);
+                heart.setFillColor(sf::Color::Red);
+                heart.setPosition({20.f + i * 35.f, 20.f});
+                window.draw(heart);
+            }
         }
 
         if (hasFont)
